@@ -40,7 +40,7 @@ read proxy
 parse_proxy $proxy
 
 # 检测代理是否可用
-if curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT https://cip.cc; then
+if curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT cip.cc; then
     echo "Proxy is working."
 else
     echo "Proxy is not working."

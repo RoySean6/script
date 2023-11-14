@@ -142,3 +142,19 @@ echo "1) Add new configuration"
 echo "2) Show and manage existing configurations"
 echo "3) Check configuration status"
 read -p "Enter your choice (1-3): " choice
+
+case $choice in
+    1)
+        add_new_configuration
+        ;;
+    2)
+        manage_existing_configurations
+        ;;
+    3)
+        check_configuration_status
+        ;;
+    *)
+        echo "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac

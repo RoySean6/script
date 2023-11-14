@@ -11,8 +11,9 @@ parse_proxy() {
         PROXY_PORT=${BASH_REMATCH[5]}
     else
         echo "Proxy format is invalid."
-        exit 1
+        return 1
     fi
+    return 0
 }
 
 # 检查并安装必要的软件
@@ -24,69 +25,94 @@ check_install() {
     if ! command -v $command &> /dev/null
     then
         echo "Installing $name..."
-        eval $install_command
+        eval $install_command || { echo "Failed to install $name. Exiting."; exit 1; }
     else
         echo "$name is already installed."
     fi
 }
 
-check_install "socat" "socat" "wget http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz && tar xzf socat-1.7.4.4.tar.gz && cd socat-1.7.4.4 && ./configure && make && sudo make install && cd .. && rm -rf socat-1.7.4.4 socat-1.7.4.4.tar.gz"
-check_install "proxychains-ng" "proxychains4" "git clone https://github.com/rofl0r/proxychains-ng.git && cd proxychains-ng && ./configure --prefix=/usr --sysconfdir=/etc && make && sudo make install && cd .. && rm -rf proxychains-ng"
-check_install "supervisor" "supervisorctl" "sudo apt-get update && sudo apt-get install -y supervisor"
+add_new_configuration() {
+    check_install "socat" "socat" "wget http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz && tar xzf socat-1.7.4.4.tar.gz && cd socat-1.7.4.4 && ./configure && make && sudo make install && cd .. && rm -rf socat-1.7.4.4 socat-1.7.4.4.tar.gz"
+    check_install "proxychains-ng" "proxychains4" "git clone https://github.com/rofl0r/proxychains-ng.git && cd proxychains-ng && ./configure --prefix=/usr --sysconfdir=/etc && make && sudo make install && cd .. && rm -rf proxychains-ng"
+    check_install "supervisor" "supervisorctl" "sudo apt-get update && sudo apt-get install -y supervisor"
 
-# 获取并解析代理信息
-echo "Enter proxy (format: https://user:password@host:port):"
-read proxy
-parse_proxy $proxy
+    # 获取并解析代理信息
+    echo "Enter proxy (format: https://user:password@host:port):"
+    read proxy
+    parse_proxy $proxy || return 1
 
-# 检测代理是否可用
-if curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT cip.cc; then
+    # 检测代理是否可用
+    if ! curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT https://cip.cc; then
+        echo "Proxy is not working. Exiting."
+        return 1
+    fi
     echo "Proxy is working."
-else
-    echo "Proxy is not working."
-    exit 1
-fi
 
-# 获取本地端口和目标域名
-echo "Enter local port:"
-read local_port
-echo "Enter target domain (optionally with port, default is 443):"
-read target_domain
+    # 获取本地端口和目标域名
+    echo "Enter local port:"
+    read local_port
+    echo "Enter target domain (optionally with port, default is 443):"
+    read target_domain
 
-# 如果目标域名不包含端口，则默认为443
-TARGET_HOST=$(echo $target_domain | cut -d':' -f1)
-TARGET_PORT=$(echo $target_domain | cut -s -d':' -f2)
-TARGET_PORT=${TARGET_PORT:-443}
+    # 如果目标域名不包含端口，则默认为443
+    TARGET_HOST=$(echo $target_domain | cut -d':' -f1)
+    TARGET_PORT=$(echo $target_domain | cut -s -d':' -f2)
+    TARGET_PORT=${TARGET_PORT:-443}
 
-# 检查端口是否被占用
-if lsof -i :$local_port
-then
-    echo "Port $local_port is already in use. Trying to free it..."
-    sudo fuser -k $local_port/tcp
-fi
+    # 检查端口是否被占用
+    if lsof -i :$local_port
+    then
+        echo "Port $local_port is already in use. Trying to free it..."
+        sudo fuser -k $local_port/tcp
+    fi
 
-# 创建一个随机的proxychains配置文件名
-PROXYCHAINS_CONF="/etc/proxychains_$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1).conf"
-proxy_conf="socks5  $PROXY_HOST  $PROXY_PORT  $PROXY_USER  $PROXY_PASS"
-echo -e "[ProxyList]\n$proxy_conf" | sudo tee $PROXYCHAINS_CONF
+    # 在root目录生成SSL证书
+    cd /root
+    openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 -subj "/C=US/ST=Denial/L=Springfield/O=Dis/CN=$TARGET_HOST" -keyout server.pem -out server.pem
 
-# 配置supervisor
-supervisor_program_name=$(echo $TARGET_HOST | cut -d'.' -f1)
-supervisor_conf="[program:$supervisor_program_name]
-user=root
-command=proxychains4 -f $PROXYCHAINS_CONF socat OPENSSL-LISTEN:$local_port,reuseaddr,fork,verify=0,cert=server.pem OPENSSL:$TARGET_HOST:$TARGET_PORT,verify=0
-directory=/root
-autorestart=true
-startsecs=10
-startretries=100"
+    # 创建一个随机的proxychains配置文件名
+    PROXYCHAINS_CONF="/etc/proxychains_$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1).conf"
+    proxy_conf="socks5  $PROXY_HOST  $PROXY_PORT  $PROXY_USER  $PROXY_PASS"
+    echo -e "[ProxyList]\n$proxy_conf" | sudo tee $PROXYCHAINS_CONF
 
-sudo echo "$supervisor_conf" | sudo tee /etc/supervisor/conf.d/$supervisor_program_name.conf
+    # 配置supervisor
+    supervisor_program_name=$(echo $TARGET_HOST | cut -d'.' -f1)
+    supervisor_conf="[program:$supervisor_program_name]
+    user=root
+    command=proxychains4 -f $PROXYCHAINS_CONF socat OPENSSL-LISTEN:$local_port,reuseaddr,fork,verify=0,cert=/root/server.pem OPENSSL:$TARGET_HOST:$TARGET_PORT,verify=0
+    directory=/root
+    autorestart=true
+    startsecs=10
+    startretries=100"
 
-# 更新并重启特定的supervisor配置
-sudo supervisorctl update
-sudo supervisorctl restart $supervisor_program_name
+    sudo echo "$supervisor_conf" | sudo tee /etc/supervisor/conf.d/$supervisor_program_name.conf
 
-echo "Checking if the socat service is working..."
-curl -k -v -H "Host: $TARGET_HOST" https://127.0.0.1:$local_port
+    # 更新并重启特定的supervisor配置
+    sudo supervisorctl update
+    sudo supervisorctl restart $supervisor_program_name
 
-echo "Setup complete."
+    echo "Checking if the socat service is working..."
+    curl -k -v -H "Host: $TARGET_HOST" https://127.0.0.1:$local_port
+
+    echo "New configuration added."
+}
+
+manage_existing_configurations() {
+    # ...
+}
+
+# 主菜单
+# ...
+
+case $choice in
+    1)
+        add_new_configuration
+        ;;
+    2)
+        manage_existing_configurations
+        ;;
+    *)
+        echo "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac

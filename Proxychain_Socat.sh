@@ -48,7 +48,7 @@ add_new_configuration() {
 
     echo "Enter local port:"
     read local_port
-    echo "Enter target domain (optionally with port, default is 443):"
+    echo "Enter target domain (with port if not 443):"
     read target_domain
 
     TARGET_HOST=$(echo $target_domain | cut -d':' -f1)
@@ -69,7 +69,7 @@ add_new_configuration() {
     proxy_conf="socks5  $PROXY_HOST  $PROXY_PORT  $PROXY_USER  $PROXY_PASS"
     echo -e "[ProxyList]\n$proxy_conf" | sudo tee $PROXYCHAINS_CONF
 
-    supervisor_program_name=$(echo $TARGET_HOST | cut -d'.' -f1)
+    supervisor_program_name="$TARGET_HOST"
     supervisor_conf="[program:$supervisor_program_name]
     user=root
     command=proxychains4 -f $PROXYCHAINS_CONF socat OPENSSL-LISTEN:$local_port,reuseaddr,fork,verify=0,cert=$CERT_FILE OPENSSL:$TARGET_HOST:$TARGET_PORT,verify=0
@@ -98,11 +98,11 @@ manage_existing_configurations() {
         exit 0
     fi
 
-    if [ -f "/etc/supervisor/conf.d/$config_name" ]; then
+    if [ -f "/etc/supervisor/conf.d/$config_name.conf" ]; then
         echo "Selected configuration: $config_name"
         read -p "Do you want to delete this configuration? (y/n): " delete_choice
         if [ "$delete_choice" == "y" ]; then
-            sudo rm "/etc/supervisor/conf.d/$config_name"
+            sudo rm "/etc/supervisor/conf.d/$config_name.conf"
             sudo supervisorctl reread
             sudo supervisorctl update
             echo "Configuration $config_name deleted."
@@ -114,20 +114,31 @@ manage_existing_configurations() {
     fi
 }
 
+check_configuration_status() {
+    echo "Existing supervisor configurations:"
+    ls /etc/supervisor/conf.d/
+
+    read -p "Enter the domain name of the configuration to check (or enter to cancel): " config_domain
+    if [ -z "$config_domain" ]; then
+        echo "No configuration selected. Exiting."
+        exit 0
+    fi
+
+    if [ -f "/etc/supervisor/conf.d/$config_domain.conf" ]; then
+        echo "Selected configuration: $config_domain"
+        CONFIG_PORT=$(grep "OPENSSL-LISTEN" /etc/supervisor/conf.d/$config_domain.conf | sed -n 's/.*OPENSSL-LISTEN:\([0-9]*\).*/\1/p')
+        if [ -n "$CONFIG_PORT" ]; then
+            curl -k -v -H "Host: $config_domain" https://127.0.0.1:$CONFIG_PORT
+        else
+            echo "Could not determine the port for $config_domain."
+        fi
+    else
+        echo "Configuration $config_domain not found."
+    fi
+}
+
 echo "Choose an option:"
 echo "1) Add new configuration"
 echo "2) Show and manage existing configurations"
-read -p "Enter your choice (1 or 2): " choice
-
-case $choice in
-    1)
-        add_new_configuration
-        ;;
-    2)
-        manage_existing_configurations
-        ;;
-    *)
-        echo "Invalid choice. Exiting."
-        exit 1
-        ;;
-esac
+echo "3) Check configuration status"
+read -p "Enter your choice (1-3): " choice

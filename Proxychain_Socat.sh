@@ -40,7 +40,7 @@ add_new_configuration() {
     read proxy
     parse_proxy $proxy || { echo "Error parsing proxy details. Exiting."; return 1; }
 
-    if ! curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT https://cip.cc; then
+    if ! curl -x $PROXY_TYPE://$PROXY_USER:$PROXY_PASS@$PROXY_HOST:$PROXY_PORT http://httpbin.org/get; then
         echo "Proxy is not working. Exiting."
         return 1
     fi
